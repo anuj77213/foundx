@@ -1,87 +1,178 @@
 import {auth,db} from './firebase-config.js';
 import {createUserWithEmailAndPassword as signUp,signInWithEmailAndPassword as signIn,signOut,onAuthStateChanged} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-import {doc,setDoc,collection,addDoc,updateDoc,query,orderBy,limit,onSnapshot,arrayUnion,arrayRemove} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import {doc,setDoc,collection,addDoc,updateDoc,deleteDoc,query,orderBy,limit,where,onSnapshot,arrayUnion,arrayRemove} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const F=['Tech','AI','E-commerce','EdTech','Content','Social Impact','Marketing'];
+const FC={Tech:'#8b5cf6',AI:'#06b6d4','E-commerce':'#f59e0b',EdTech:'#10b981',Content:'#ec4899','Social Impact':'#22c55e',Marketing:'#f97316'},F=Object.keys(FC);
 const CLS=['High School','College','Independent'],EX=['Just an idea','Building MVP','Launched','Earning revenue'];
-const S={uid:null,view:'feed',filter:'All',peer:null,room:'Tech',q:'',auth:'login',edit:false,img:''};
-let users={},posts=[],msgs=[],unsubs=[],unsubChat=null,ready=false;
-const $=id=>document.getElementById(id),U=id=>users[id]||{name:'?'},me=()=>users[S.uid];
-const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const ago=t=>{const m=(Date.now()-t)/6e4|0;return m<1?'now':m<60?m+'m':m<1440?(m/60|0)+'h':(m/1440|0)+'d'};
-const av=n=>`<span class="inline-flex w-9 h-9 rounded-full items-center justify-center text-white font-bold shrink-0" style="background:linear-gradient(135deg,#8b5cf6,#06b6d4)">${esc((n||'?')[0])}</span>`;
-const fld=(l,id,t='text',v='')=>`<label class="block text-xs opacity-70 mt-2">${l}</label><input id="${id}" type="${t}" value="${esc(v)}" class="in">`;
-const sel=(l,id,o,v='')=>`<label class="block text-xs opacity-70 mt-2">${l}</label><select id="${id}" class="in">${o.map(x=>`<option ${x==v?'selected':''}>${x}</option>`).join('')}</select>`;
-const fields=(u={})=>fld('Full name','n','text',u.name)+fld('Age','a','number',u.age)+sel('Class / education','c',CLS,u.cls)+fld('Country','co','text',u.country||'India')+fld('Date of birth','dob','date',u.dob)+fld('Phone','ph','tel',u.phone)+sel('Field of interest','f',F,u.field)+fld('Short bio / vision','b','text',u.bio)+fld('Your startup idea','i','text',u.idea)+sel('Idea executed?','x',EX,u.exec);
-const read=()=>({name:$('n').value.trim(),age:+$('a').value,cls:$('c').value,country:$('co').value,dob:$('dob').value,phone:$('ph').value,field:$('f').value,bio:$('b').value,idea:$('i').value,exec:$('x').value});
+const S={uid:null,view:'feed',filter:'All',peer:null,room:'Tech',q:'',xf:'All',mode:'login',step:1,edit:false,img:'',draft:'',open:new Set(),chat:false,pw:false,busy:false,group:null,cq:'',gsel:new Set()};
+let D={country:'India',cls:'High School',field:'Tech',exec:'Just an idea'};
+let users={},posts=[],msgs=[],groups=[],stories=[],unsubs=[],unsubChat=null,ready=false,dirty=false;
+const $=id=>document.getElementById(id),U=id=>users[id]||{name:'Founder'},me=()=>users[S.uid];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ago=t=>{const m=(Date.now()-t)/6e4|0;return m<1?'just now':m<60?m+'m':m<1440?(m/60|0)+'h':(m/1440|0)+'d'};
+const hue=n=>[...(n||'?')].reduce((a,c)=>a+c.charCodeAt(0),0)%360;
+const av=(n,s=40,id)=>{const a=`<span class="av" style="width:${s}px;height:${s}px;font-size:${s*.42}px;background:linear-gradient(135deg,hsl(${hue(n)} 80% 60%),hsl(${hue(n)+50} 80% 52%))">${esc((n||'?')[0].toUpperCase())}</span>`;return id&&users[id]?`<span class="avw">${a}<i class="dot" style="background:${dotc(users[id])}"></i></span>`:a};
+const badge=f=>f?`<span class="badge" style="--c:${FC[f]||'#888'}">${esc(f)}</span>`:'';
+const toast=m=>{const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),3200)};
+const chips=(k,arr,v)=>`<div class="scroll" style="flex-wrap:wrap">${arr.map(x=>`<button class="chip ${v==x?'on':''}" onclick="setD('${k}','${x}')">${x}</button>`).join('')}</div>`;
+const inp=(l,id,t='text',v='',ph='')=>`<label class="l">${l}</label><input id="${id}" type="${t}" value="${esc(v)}" placeholder="${ph}" class="inp">`;
 const theme=()=>document.documentElement.classList.toggle('dark',localStorage.fxTheme!=='light');
+const inInput=()=>{const a=document.activeElement;return a&&['INPUT','TEXTAREA','SELECT'].includes(a.tagName)&&$('view')?.contains(a)};
 const dmId=()=>[S.uid,S.peer].sort().join('_');
+const errMsg=e=>({'auth/invalid-credential':'Wrong email or password.','auth/email-already-in-use':'This email is already registered. Try logging in.','auth/weak-password':'Password must be at least 6 characters.','auth/invalid-email':'Please enter a valid email.','auth/too-many-requests':'Too many tries. Wait a bit and retry.'}[e.code]||e.message);
 
 // ---------- realtime ----------
+const DAY=864e5,SV={list:[],ui:0,i:0,t:null};let hb=null,warned=false,simg='';
+const on=(ref,fn,crit)=>onSnapshot(ref,fn,e=>{if(!warned){warned=true;toast(e.code=='permission-denied'?'⚠️ Permission denied – publish the latest firestore.rules in Firebase':'⚠️ '+e.message)}if(crit){ready=true;render()}});
+const online=u=>!!u&&Date.now()-(u.lastSeen||0)<3e5;
+const AV={'Available':'#22c55e','Busy':'#f59e0b','Do not disturb':'#ef4444','Open to co-found':'#06b6d4'},AVL=Object.keys(AV);
+const dotc=u=>online(u)?AV[u.avail||'Available']||'#22c55e':'#6b7280';
+const availTag=u=>`<span class="badge" style="--c:${dotc(u)}">${online(u)?esc(u.avail||'Available'):'Offline'}</span>`;
+const safeImg=x=>/^data:image\//.test(x||'')?x:'';
+const linkTags=h=>h.replace(/(^|\s)#([A-Za-z]\w*)/g,(m,a,t)=>`${a}<a style="color:var(--a);cursor:pointer;font-weight:600" onclick="go('feed',{filter:'#${t.toLowerCase()}'})">#${t}</a>`);
+const streak=id=>{const d=new Set([...posts.filter(p=>p.uid==id),...stories.filter(x=>x.uid==id)].map(x=>new Date(x.ts).toDateString()));let n=0,t=new Date();if(!d.has(t.toDateString()))t.setDate(t.getDate()-1);while(d.has(t.toDateString())){n++;t.setDate(t.getDate()-1)}return n};
+const beat=()=>{if(S.uid&&users[S.uid])updateDoc(doc(db,'users',S.uid),{lastSeen:Date.now()}).catch(()=>{})};
 function listen(){
-  unsubs=[onSnapshot(collection(db,'users'),s=>{users={};s.forEach(d=>users[d.id]=d.data());ready=true;soft()}),
-  onSnapshot(query(collection(db,'posts'),orderBy('ts','desc'),limit(100)),s=>{posts=s.docs.map(d=>({id:d.id,...d.data()}));soft()})];
-}
-function watchChat(){
-  unsubChat&&unsubChat();msgs=[];if(!S.room&&!S.peer)return;
-  const ref=S.room?collection(db,'rooms',S.room,'messages'):collection(db,'chats',dmId(),'messages');
-  unsubChat=onSnapshot(query(ref,orderBy('ts'),limit(200)),s=>{msgs=s.docs.map(d=>d.data());const l=$('ml');if(l){l.innerHTML=msgList();l.scrollTop=1e6}});
-}
-function soft(){const a=document.activeElement;if(a&&['INPUT','TEXTAREA','SELECT'].includes(a.tagName))return;render()}
+ unsubs=[on(collection(db,'users'),s=>{users={};s.forEach(d=>users[d.id]=d.data());ready=true;if(!$('view'))render();else paint()},1),
+ on(query(collection(db,'posts'),orderBy('ts','desc'),limit(150)),s=>{posts=s.docs.map(d=>({id:d.id,...d.data()}));if($('view'))paint()}),
+ on(query(collection(db,'stories'),orderBy('ts','desc'),limit(120)),s=>{stories=s.docs.map(d=>({id:d.id,...d.data()}));stories.filter(x=>x.uid==S.uid&&Date.now()-x.ts>=DAY).forEach(x=>deleteDoc(doc(db,'stories',x.id)).catch(()=>{}));if($('view'))paint()}),
+ on(query(collection(db,'groups'),where('members','array-contains',S.uid)),s=>{groups=s.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.created-a.created);if($('view'))paint()})];
+ setTimeout(beat,2500);hb=setInterval(beat,18e4)}
+const cref=()=>S.room?collection(db,'rooms',S.room,'messages'):S.group?collection(db,'groups',S.group,'messages'):collection(db,'chats',dmId(),'messages');
+function watchChat(){unsubChat&&unsubChat();msgs=[];if(!S.room&&!S.peer&&!S.group)return;unsubChat=on(query(cref(),orderBy('ts'),limit(200)),s=>{msgs=s.docs.map(d=>d.data());paintChat()})}
+function paint(){if(!$('view'))return;paintRight();const v=S.view;
+ if(v=='feed'){paintPosts();paintStories()}else if(v=='profile'){if(!S.edit&&!inInput())renderView()}else if(v=='explore')paintExplore();else if(v=='msgs')paintList()}
+document.addEventListener('focusout',()=>{if(dirty){dirty=false;setTimeout(paintPosts,150)}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)beat()});
+addEventListener('offline',()=>toast('You are offline'));addEventListener('online',()=>toast('Back online ✅'));
+addEventListener('unhandledrejection',e=>toast('⚠️ '+(e.reason?.message||'Something went wrong')));
+onAuthStateChanged(auth,u=>{unsubs.forEach(f=>f());unsubChat&&unsubChat();clearInterval(hb);closeOv();S.uid=u?.uid||null;ready=false;users={};posts=[];stories=[];groups=[];msgs=[];Object.assign(S,{view:'feed',room:'Tech',peer:null,group:null,chat:false,filter:'All'});if(u)listen();render()});
 
 // ---------- auth ----------
-onAuthStateChanged(auth,u=>{unsubs.forEach(f=>f());unsubChat&&unsubChat();S.uid=u?u.uid:null;ready=false;if(u)listen();render()});
-const authV=()=>{const s=S.auth=='signup';return `<div class="g p-5 mt-10"><h1 class="text-3xl font-extrabold bg-clip-text text-transparent" style="background-image:linear-gradient(90deg,#a78bfa,#22d3ee,#34d399)">FoundX</h1><p class="opacity-70 text-sm">Share your startup journey. Day by day.</p>
-${s?fields():''}${fld('Email','em','email')}${fld('Password (min 6)','pw','password')}
-<button class="btn w-full mt-4" onclick="doAuth()">${s?'Create account':'Log in'}</button>
-<p class="text-sm mt-3 text-center opacity-80 cursor-pointer" onclick="S.auth='${s?'login':'signup'}';render()">${s?'Have an account? Log in':'New here? Sign up'}</p></div>`};
-const onboardV=()=>`<div class="g p-5 mt-10"><h2 class="text-xl font-bold">Complete your profile</h2>${fields()}<button class="btn w-full mt-4" onclick="saveProfile(true)">Continue</button></div>`;
-async function doAuth(){const e=$('em').value.trim(),p=$('pw').value;
-  try{if(S.auth=='signup'){const d=read();if(!d.name||!d.age)return alert('Name and age required');const c=await signUp(auth,e,p);await setDoc(doc(db,'users',c.user.uid),{...d,email:e,created:Date.now()})}else await signIn(auth,e,p)}catch(x){alert(x.message)}}
-async function saveProfile(first){const d=read();if(!d.name)return alert('Name required');await setDoc(doc(db,'users',S.uid),{...d,email:auth.currentUser.email,created:Date.now()},{merge:true});S.edit=false;render()}
+const STEPS=()=>S.mode=='signup'?['acct','about','idea']:['about','idea'];
+function grab(){[['em','email'],['pw','pw'],['n','name'],['a','age'],['co','country'],['dob','dob'],['ph','phone'],['i','idea'],['b','bio']].forEach(([id,k])=>{if($(id))D[k]=$(id).value.trim()})}
+const setD=(k,v)=>{grab();D[k]=v;render()};
+function authV(){const login=S.mode=='login',st=STEPS()[S.step-1],n=STEPS().length;
+ const body=login?`<h2 style="font-size:1.5rem;font-weight:800">Welcome back 👋</h2>${inp('Email','em','email',D.email,'you@email.com')}<label class="l">Password</label><div style="position:relative"><input id="pw" type="${S.pw?'text':'password'}" class="inp" onkeydown="event.key=='Enter'&&doLogin()"><button style="position:absolute;right:12px;top:10px" onclick="grab();S.pw=!S.pw;render()">${S.pw?'🙈':'👁️'}</button></div><button class="btn" style="width:100%;margin-top:1.2rem" onclick="doLogin()">Log in</button>`
+ :`<div class="bar" style="margin-bottom:10px"><i style="width:${S.step/n*100}%"></i></div><div class="step">Step ${S.step} of ${n}</div>`+
+ (st=='acct'?`<h2 style="font-size:1.4rem;font-weight:800;margin-top:6px">Create your account</h2>${inp('Email','em','email',D.email,'you@email.com')}${inp('Password (min 6 characters)','pw','password',D.pw)}`:
+  st=='about'?`<h2 style="font-size:1.4rem;font-weight:800;margin-top:6px">Tell us about you</h2>${inp('Full name','n','text',D.name)}<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${inp('Age','a','number',D.age)}${inp('Country','co','text',D.country)}</div><label class="l">Class / education</label>${chips('cls',CLS,D.cls)}<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${inp('Date of birth','dob','date',D.dob)}${inp('Phone','ph','tel',D.phone)}</div>`:
+  `<h2 style="font-size:1.4rem;font-weight:800;margin-top:6px">Your startup journey 🚀</h2><label class="l">Field of interest</label>${chips('field',F,D.field)}${inp('Your startup idea','i','text',D.idea,'e.g. AI tutor for students')}<label class="l">Have you started building?</label>${chips('exec',EX,D.exec)}${inp('Short bio','b','text',D.bio,'One line about your vision')}`)+
+  `<div style="display:flex;gap:10px;margin-top:1.3rem">${S.step>1?'<button class="ghost" onclick="grab();S.step--;render()">← Back</button>':''}<button class="btn" style="flex:1" onclick="next()">${S.step==n?'Join FoundX 🎉':'Continue →'}</button></div>`;
+ const sw=S.mode=='onboard'?'':`<p style="text-align:center;margin-top:1rem;font-size:.88rem;color:var(--mu);cursor:pointer" onclick="grab();S.mode='${login?'signup':'login'}';S.step=1;render()">${login?'New here? <b style="color:var(--a)">Create an account</b>':'Already a member? <b style="color:var(--a)">Log in</b>'}</p>`;
+ return `<div class="auth"><div class="hero"><div class="logo" style="font-size:2.2rem">FoundX</div><h1 style="font-size:3rem;line-height:1.1;font-weight:800;margin:14px 0">Build in public.<br><span class="logo">Grow together.</span></h1><p style="color:var(--mu);font-size:1.1rem">The community for young founders to share daily progress, get feedback and find co-founders.</p><div style="margin-top:22px;display:grid;gap:12px;color:var(--mu)"><div>📅 Share “Day 4 of my startup” updates</div><div>💬 Chat with founders in your field</div><div>💡 Get honest feedback on your idea</div></div></div>
+ <div class="card" style="padding:26px"><div class="logo mlogo" style="margin-bottom:6px">FoundX</div>${body}${sw}</div></div>`}
+async function doLogin(){grab();if(!D.email||!$('pw').value)return toast('Enter email and password');try{await signIn(auth,D.email,$('pw').value)}catch(e){toast(errMsg(e))}}
+async function next(){grab();const st=STEPS()[S.step-1];
+ if(st=='acct'){if(!/^\S+@\S+\.\S+$/.test(D.email||''))return toast('Enter a valid email');if((D.pw||'').length<6)return toast('Password must be at least 6 characters')}
+ if(st=='about'){if(!D.name)return toast('Please enter your name');if(!(+D.age>0))return toast('Please enter your age')}
+ if(S.step<STEPS().length){S.step++;return render()}
+ try{S.busy=true;render();let email=D.email;if(S.mode=='signup')await signUp(auth,D.email,D.pw);else email=auth.currentUser.email;
+  await setDoc(doc(db,'users',auth.currentUser.uid),{name:D.name,age:+D.age,cls:D.cls,country:D.country||'',dob:D.dob||'',phone:D.phone||'',field:D.field,bio:D.bio||'',idea:D.idea||'',exec:D.exec,email,created:Date.now(),lastSeen:Date.now(),avail:'Available'});
+  S.busy=false;S.mode='login';D.pw='';toast('Welcome to FoundX! 🎉')}catch(e){S.busy=false;S.step=1;S.mode=S.mode=='onboard'?'onboard':'signup';render();toast(errMsg(e))}}
 
 // ---------- posts ----------
-async function post(){const t=$('pt').value.trim();if(!t&&!S.img)return;await addDoc(collection(db,'posts'),{uid:S.uid,t,img:S.img,likes:[],cm:[],ts:Date.now()});S.img='';render()}
-function pick(f){if(!f)return;const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{const k=Math.min(1,640/im.width),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);S.img=c.toDataURL('image/jpeg',.7);$('pv').innerHTML=`<img src="${S.img}" class="rounded-xl max-h-40 mt-2">`};im.src=r.result};r.readAsDataURL(f)}
+const dayN=p=>posts.filter(x=>x.uid==p.uid&&x.ts<=p.ts).length;
+async function post(){const t=($('pt').value||'').trim();if(!t&&!S.img)return toast('Write something first');$('pb').disabled=true;
+ try{await addDoc(collection(db,'posts'),{uid:S.uid,t,img:S.img,likes:[],cm:[],ts:Date.now()});S.img='';S.draft='';$('pt').value='';$('pv').innerHTML='';toast('Posted 🚀')}catch(e){toast(errMsg(e))}$('pb').disabled=false}
+function pick(f){if(!f)return;const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{const k=Math.min(1,640/im.width),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);S.img=c.toDataURL('image/jpeg',.72);prev()};im.src=r.result};r.readAsDataURL(f)}
+const prev=()=>{$('pv').innerHTML=S.img?`<div style="position:relative;margin-top:10px"><img src="${S.img}" style="border-radius:14px;max-height:200px"><button class="ghost" style="position:absolute;top:6px;right:6px;background:#000a;color:#fff" onclick="S.img='';prev()">✕</button></div>`:''};
 const like=id=>{const p=posts.find(p=>p.id==id);updateDoc(doc(db,'posts',id),{likes:p.likes.includes(S.uid)?arrayRemove(S.uid):arrayUnion(S.uid)})};
-const cmt=id=>{const t=$('c'+id).value.trim();if(t){$('c'+id).value='';updateDoc(doc(db,'posts',id),{cm:arrayUnion({uid:S.uid,t})})}};
-const share=id=>{navigator.clipboard?.writeText(posts.find(p=>p.id==id).t);alert('Post text copied!')};
-const postC=p=>`<div class="g p-4 mt-3"><div class="flex gap-3 items-center cursor-pointer" onclick="go('profile',{peer:'${p.uid}'})">${av(U(p.uid).name)}<div><b>${esc(U(p.uid).name)}</b> <span class="chip">${esc(U(p.uid).field)}</span><div class="text-xs opacity-60">${ago(p.ts)}</div></div></div>
-<p class="mt-3 whitespace-pre-wrap">${esc(p.t)}</p>${p.img?`<img src="${p.img}" class="rounded-xl mt-2 max-w-full">`:''}
-<div class="flex gap-5 mt-3 text-sm"><button onclick="like('${p.id}')">${p.likes.includes(S.uid)?'💜':'🤍'} ${p.likes.length}</button><span>💬 ${p.cm.length}</span><button onclick="share('${p.id}')">🔗 Share</button></div>
-${p.cm.map(c=>`<p class="text-sm mt-2"><b>${esc(U(c.uid).name)}</b> ${esc(c.t)}</p>`).join('')}
-<div class="flex gap-2 mt-2"><input id="c${p.id}" class="in" placeholder="Comment…"><button class="btn" onclick="cmt('${p.id}')">↵</button></div></div>`;
-const feedV=()=>{let ps=[...posts];if(S.filter=='Trending')ps.sort((a,b)=>b.likes.length+b.cm.length-a.likes.length-a.cm.length);else if(S.filter!='All'&&S.filter!='Latest')ps=ps.filter(p=>U(p.uid).field==S.filter);
-return `<div class="g p-4 mt-3"><textarea id="pt" class="in" rows="2" placeholder="Day ${posts.filter(p=>p.uid==S.uid).length+1} of my startup…"></textarea><div id="pv"></div>
-<div class="flex justify-between mt-2"><label class="chip">📷 Image<input type="file" accept="image/*" hidden onchange="pick(this.files[0])"></label><button class="btn" onclick="post()">Post</button></div></div>
-<div class="flex gap-2 flex-wrap mt-3">${['All','Latest','Trending',...F].map(f=>`<span class="chip ${S.filter==f?'on':''}" onclick="go('feed',{filter:'${f}'})">${f}</span>`).join('')}</div>${ps.map(postC).join('')||'<p class="mt-4 opacity-60">No posts yet. Be the first!</p>'}`};
+const cmt=id=>{const el=$('c'+id),t=el.value.trim();if(t){el.value='';updateDoc(doc(db,'posts',id),{cm:arrayUnion({uid:S.uid,t})})}};
+const tg=id=>{S.open.has(id)?S.open.delete(id):S.open.add(id);paintPosts()};
+const share=id=>{navigator.clipboard?.writeText(posts.find(p=>p.id==id).t);toast('Post text copied!')};
+const del=id=>{if(confirm('Delete this post?'))deleteDoc(doc(db,'posts',id)).then(()=>toast('Post deleted'))};
+const postC=p=>{const u=U(p.uid),lk=p.likes.includes(S.uid),op=S.open.has(p.id);
+ return `<article class="card" style="padding:16px;margin-top:14px"><div style="display:flex;gap:12px;align-items:center"><div style="cursor:pointer" onclick="go('profile',{peer:'${p.uid}'})">${av(u.name,40,p.uid)}</div><div style="flex:1;min-width:0"><b style="cursor:pointer" onclick="go('profile',{peer:'${p.uid}'})">${esc(u.name)}</b> ${badge(u.field)}<div style="font-size:.75rem;color:var(--mu)">${badge('Day '+dayN(p)).replace('#888','#10b981')} ${ago(p.ts)}</div></div>${p.uid==S.uid?`<button title="Delete" onclick="del('${p.id}')">🗑️</button>`:''}</div>
+<p style="margin-top:12px;white-space:pre-wrap;word-break:break-word">${linkTags(esc(p.t))}</p>${p.img?`<img src="${safeImg(p.img)}" style="border-radius:14px;margin-top:10px;max-width:100%">`:''}
+<div style="display:flex;gap:6px;margin-top:12px;font-size:.88rem"><button class="ghost" onclick="like('${p.id}')">${lk?'💜':'🤍'} ${p.likes.length}</button><button class="ghost" onclick="tg('${p.id}')">💬 ${p.cm.length}</button><button class="ghost" onclick="share('${p.id}')">🔗</button></div>
+${op?`<div style="margin-top:10px">${p.cm.map(c=>`<div style="display:flex;gap:8px;margin-top:8px">${av(U(c.uid).name,28)}<div class="bub" style="padding:.35rem .75rem;font-size:.88rem"><b>${esc(U(c.uid).name)}</b> ${esc(c.t)}</div></div>`).join('')}<div style="display:flex;gap:8px;margin-top:10px"><input id="c${p.id}" class="inp" placeholder="Write a comment…" onkeydown="event.key=='Enter'&&cmt('${p.id}')"><button class="btn" onclick="cmt('${p.id}')">Send</button></div></div>`:''}</article>`};
+function paintPosts(){const el=$('plist');if(!el)return;const a=document.activeElement;if(a&&el.contains(a)&&a.value){dirty=true;return}
+ if(!ready){el.innerHTML='<div class="sk"></div><div class="sk"></div>';return}
+ let ps=[...posts];const id=S.peer||S.uid;
+ if(S.view=='profile')ps=ps.filter(p=>p.uid==id);else if(S.filter=='Trending')ps.sort((a,b)=>b.likes.length+b.cm.length-a.likes.length-a.cm.length);else if(S.filter[0]=='#')ps=ps.filter(p=>(p.t||'').toLowerCase().includes(S.filter));else if(!['All','Latest'].includes(S.filter))ps=ps.filter(p=>U(p.uid).field==S.filter);
+ el.innerHTML=ps.map(postC).join('')||`<div class="card" style="padding:40px;text-align:center;margin-top:14px;color:var(--mu)"><div style="font-size:2.2rem">🌱</div>No posts here yet.<br>Be the first to share your journey!</div>`}
 
-// ---------- explore / chat / profile ----------
-const list=()=>{const q=S.q.toLowerCase();return Object.entries(users).filter(([id,u])=>id!=S.uid&&[u.name,u.field,u.cls].join(' ').toLowerCase().includes(q)).map(([id,u])=>`<div class="g p-3 mt-3 flex items-center gap-3">${av(u.name)}<div class="flex-1 cursor-pointer" onclick="go('profile',{peer:'${id}'})"><b>${esc(u.name)}</b><div class="text-xs opacity-70">${esc(u.field)} · ${esc(u.cls)}</div></div><button class="btn" onclick="go('msgs',{peer:'${id}',room:null})">Chat</button></div>`).join('')||'<p class="mt-4 opacity-60">No matches.</p>'};
-const exploreV=()=>`<input class="in mt-3" placeholder="Search by name, field or class…" value="${esc(S.q)}" oninput="S.q=this.value;$('sl').innerHTML=list()"><div id="sl">${list()}</div>`;
-const msgList=()=>msgs.map(m=>`<div class="mb-2 ${m.uid==S.uid?'text-right':''}"><span class="text-xs opacity-60">${esc(U(m.uid).name)} · ${ago(m.ts)}</span><div class="px-3 py-1.5 rounded-2xl inline-block block ${m.uid==S.uid?'bg-violet-600 text-white':'g'}">${esc(m.t)}</div></div>`).join('')||'<p class="opacity-60 text-sm">Say hi 👋</p>';
-const msgsV=()=>`<div class="flex gap-2 flex-wrap mt-3">${F.map(f=>`<span class="chip ${S.room==f?'on':''}" onclick="go('msgs',{room:'${f}'})">#${f}</span>`).join('')}</div>
-<div class="flex gap-2 flex-wrap mt-2">${Object.entries(users).filter(([i])=>i!=S.uid).map(([i,u])=>`<span class="chip ${!S.room&&S.peer==i?'on':''}" onclick="go('msgs',{room:null,peer:'${i}'})">✉ ${esc((u.name||'').split(' ')[0])}</span>`).join('')}</div>
-<div class="g p-3 mt-3 h-80 overflow-y-auto" id="ml">${msgList()}</div>
-<div class="flex gap-2 mt-2"><input id="mt" class="in" placeholder="Message…" onkeydown="event.key=='Enter'&&send()"><button class="btn" onclick="send()">Send</button></div>`;
-async function send(){const t=$('mt').value.trim();if(!t||(!S.room&&!S.peer))return;$('mt').value='';
-  const ref=S.room?collection(db,'rooms',S.room,'messages'):collection(db,'chats',dmId(),'messages');await addDoc(ref,{uid:S.uid,t,ts:Date.now()})}
-const profV=()=>{const id=S.peer||S.uid,u=U(id),own=id==S.uid;
-  if(own&&S.edit)return `<div class="g p-4 mt-3"><h2 class="font-bold">Edit profile</h2>${fields(u)}<button class="btn mt-3" onclick="saveProfile()">Save</button></div>`;
-  return `<div class="g p-5 mt-3"><div class="flex gap-3 items-center">${av(u.name)}<div><h2 class="text-xl font-bold">${esc(u.name)}</h2><span class="chip">${esc(u.field)}</span></div></div>
-<p class="mt-3">${esc(u.bio)}</p><p class="text-sm opacity-70 mt-2">🎓 ${esc(u.cls)} · ${esc(u.age)} yrs · ${esc(u.country)}</p><p class="text-sm mt-2">💡 ${esc(u.idea||'—')} <span class="chip">${esc(u.exec)}</span></p>
-<div class="mt-3">${own?'<button class="btn" onclick="S.edit=true;render()">Edit profile</button>':`<button class="btn" onclick="go('msgs',{room:null,peer:'${id}'})">Message</button>`}</div></div>${posts.filter(p=>p.uid==id).map(postC).join('')}`};
+// ---------- views ----------
+const feedV=()=>`<div id="sbar" class="scroll" style="margin-bottom:12px"></div><div class="card" style="padding:16px"><div style="display:flex;gap:12px">${av(me().name)}<textarea id="pt" class="inp" rows="2" maxlength="500" style="resize:none" placeholder="Day ${posts.filter(p=>p.uid==S.uid).length+1} of my startup… what did you do today?" oninput="S.draft=this.value;$('cc').textContent=this.value.length+'/500'" onkeydown="event.ctrlKey&&event.key=='Enter'&&post()">${esc(S.draft)}</textarea></div><div id="pv"></div>
+<div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px"><label class="ghost" style="cursor:pointer">📷 Photo<input type="file" accept="image/*" hidden onchange="pick(this.files[0])"></label><span id="cc" style="font-size:.75rem;color:var(--mu)">${S.draft.length}/500</span><button id="pb" class="btn" onclick="post()">Post</button></div></div>
+<div class="scroll" style="margin-top:14px">${['All','Latest','Trending',...(S.filter[0]=='#'?[S.filter]:[]),...F].map(f=>`<button class="chip ${S.filter==f?'on':''}" onclick="S.filter='${f}';renderView()">${f=='Trending'?'🔥 ':''}${f}</button>`).join('')}</div><div id="plist"></div>`;
+const ucard=([id,u])=>`<div class="card" style="padding:14px;display:flex;gap:12px;align-items:center;margin-top:12px"><div style="cursor:pointer" onclick="go('profile',{peer:'${id}'})">${av(u.name,46,id)}</div><div style="flex:1;min-width:0"><b>${esc(u.name)}</b> ${badge(u.field)}<div style="font-size:.8rem;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.idea||u.bio||u.cls)}</div></div><button class="btn" style="padding:.4rem .8rem" onclick="dm('${id}')">Chat</button></div>`;
+const exploreV=()=>`<h2 style="font-size:1.4rem;font-weight:800;margin-bottom:12px">Discover founders</h2><input class="inp" placeholder="🔎 Search by name, field or class…" value="${esc(S.q)}" oninput="S.q=this.value;paintExplore()"><div class="scroll" style="margin-top:12px">${['All',...F].map(f=>`<button class="chip ${S.xf==f?'on':''}" onclick="S.xf='${f}';renderView()">${f}</button>`).join('')}</div><div id="xl"></div>`;
+function paintExplore(){const el=$('xl');if(!el)return;const q=S.q.toLowerCase();el.innerHTML=Object.entries(users).filter(([i,u])=>i!=S.uid&&(S.xf=='All'||u.field==S.xf)&&[u.name,u.field,u.cls,u.idea].join(' ').toLowerCase().includes(q)).map(ucard).join('')||'<p style="margin-top:20px;color:var(--mu);text-align:center">No founders found. Try another search.</p>'}
+const cinfo=()=>{if(S.room)return{t:'#'+S.room,sub:'Public room · open to everyone'};if(S.group){const g=groups.find(x=>x.id==S.group)||{name:'Group',members:[]};return{t:g.name,sub:g.members.length+' members · tap for info'}}const u=U(S.peer);return{t:u.name,sub:online(u)?'🟢 Online · '+esc(u.avail||'Available'):'Last seen '+(u.lastSeen?ago(u.lastSeen)+' ago':'a while ago')}};
+const msgList=()=>msgs.map(m=>{const mine=m.uid==S.uid;return `<div class="${mine?'me':''}" style="display:flex;gap:8px;margin-top:10px;${mine?'flex-direction:row-reverse;text-align:right':''}">${av(U(m.uid).name,28)}<div style="max-width:80%"><div style="font-size:.7rem;color:var(--mu)">${mine?'You':esc(U(m.uid).name)} · ${ago(m.ts)}</div>${m.img?`<img src="${safeImg(m.img)}" style="border-radius:14px;max-width:240px;margin-top:2px">`:''}${m.t?`<div class="bub">${esc(m.t)}</div>`:''}</div></div>`}).join('')||'<p style="text-align:center;color:var(--mu);margin-top:40px">No messages yet. Say hi 👋</p>';
+function paintChat(){const l=$('ml');if(l){l.innerHTML=msgList();l.scrollTop=1e7}}
+function paintList(){const el=$('cl');if(!el)return;const q=S.cq.toLowerCase(),ok=t=>String(t).toLowerCase().includes(q),it=(a,fn,ic,t)=>`<button class="nav ${a?'on':''}" onclick="${fn}">${ic}<span style="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t}</span></button>`,h=t=>`<b style="font-size:.7rem;color:var(--mu);display:block;margin:10px 0 2px 6px">${t}</b>`;
+ const gs=groups.filter(g=>ok(g.name)),rs=F.filter(ok),ps=Object.entries(users).filter(([i,u])=>i!=S.uid&&ok(u.name)).sort((a,b)=>online(b[1])-online(a[1]));
+ el.innerHTML=(gs.length?h('GROUPS')+gs.map(g=>it(S.group==g.id,`openGroup('${g.id}')`,av(g.name,30),esc(g.name))).join(''):'')+(rs.length?h('ROOMS')+rs.map(f=>it(S.room==f,`room('${f}')`,'<span style="width:30px;text-align:center;font-weight:700">#</span>',f)).join(''):'')+h('PEOPLE')+(ps.map(([i,u])=>it(!S.room&&!S.group&&S.peer==i,`dm('${i}')`,av(u.name,30,i),esc(u.name))).join('')||'<p style="font-size:.85rem;color:var(--mu);padding:6px">No founders found.</p>')}
+const msgsV=()=>{const i=cinfo(),dmv=!S.room&&!S.group;return `<div class="chatwrap ${S.chat?'open':''}"><div class="card cl"><input class="inp" placeholder="🔎 Search chats or people" value="${esc(S.cq)}" oninput="S.cq=this.value;paintList()"><button class="btn" style="width:100%;margin:10px 0" onclick="newGroup()">👥 New group</button><div id="cl"></div></div>
+<div class="card cp"><div style="padding:12px 14px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:10px"><button class="back" onclick="S.chat=false;renderView()">←</button>${dmv?av(i.t,38,S.peer):av(i.t,38)}<div style="flex:1;min-width:0;${S.group?'cursor:pointer':''}" ${S.group?'onclick="groupInfo()"':''}><b>${esc(i.t)}</b><div style="font-size:.75rem;color:var(--mu)">${i.sub}</div></div></div><div id="ml" style="flex:1;overflow-y:auto;padding:4px 14px 14px"></div><div style="display:flex;gap:8px;padding:12px;border-top:1px solid var(--bd)"><label class="ghost" style="cursor:pointer">📷<input type="file" accept="image/*" hidden onchange="cpick(this.files[0])"></label><input id="mt" class="inp" placeholder="Message ${esc(i.t)}…" onkeydown="event.key=='Enter'&&send()"><button class="btn" onclick="send()">Send</button></div></div></div>`};
+const room=r=>{Object.assign(S,{room:r,peer:null,group:null,chat:true});watchChat();renderView()};
+const dm=i=>{Object.assign(S,{view:'msgs',room:null,peer:i,group:null,chat:true});watchChat();render()};
+const openGroup=g=>{Object.assign(S,{room:null,peer:null,group:g,chat:true});watchChat();renderView()};
+async function send(){const t=$('mt').value.trim();if(!t)return;$('mt').value='';try{await addDoc(cref(),{uid:S.uid,t,ts:Date.now()})}catch(e){toast(errMsg(e))}}
+const cpick=f=>f&&img64(f,480,async d=>{try{await addDoc(cref(),{uid:S.uid,t:'',img:d,ts:Date.now()})}catch(e){toast(errMsg(e))}});
+const img64=(f,max,cb)=>{const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{const k=Math.min(1,max/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);cb(c.toDataURL('image/jpeg',.7))};im.onerror=()=>toast('Could not read this image');im.src=r.result};r.readAsDataURL(f)};
+// ---------- groups ----------
+const ov=h=>{closeOv();const d=document.createElement('div');d.id='ov';d.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.82);display:grid;place-items:center;padding:16px';d.addEventListener('mousedown',e=>{if(e.target==d)closeOv()});d.innerHTML=h;document.body.appendChild(d);return d};
+const closeOv=()=>{clearTimeout(SV.t);$('ov')?.remove()};
+const box=h=>`<div class="card" style="background:var(--bg);padding:20px;width:min(420px,100%);max-height:86vh;overflow:auto;animation:none">${h}</div>`;
+const pickList=ids=>ids.map(i=>`<label style="display:flex;align-items:center;gap:10px;padding:7px 2px;cursor:pointer">${av(U(i).name,32,i)}<span style="flex:1">${esc(U(i).name)}</span><input type="checkbox" onchange="this.checked?S.gsel.add('${i}'):S.gsel.delete('${i}')" style="width:18px;height:18px"></label>`).join('')||'<p style="color:var(--mu)">No other founders yet.</p>';
+function newGroup(){S.gsel=new Set();ov(box(`<h3 style="font-weight:800">Create group</h3><input id="gn" class="inp" maxlength="40" placeholder="Group name (e.g. AI Builders)" style="margin-top:10px"><label class="l">Add members</label>${pickList(Object.keys(users).filter(i=>i!=S.uid))}<div style="display:flex;gap:10px;margin-top:14px"><button class="ghost" onclick="closeOv()">Cancel</button><button class="btn" style="flex:1" onclick="makeGroup()">Create group</button></div>`))}
+async function makeGroup(){const n=($('gn').value||'').trim();if(!n)return toast('Give your group a name');if(!S.gsel.size)return toast('Pick at least one member');try{const r=await addDoc(collection(db,'groups'),{name:n,members:[S.uid,...S.gsel],admin:S.uid,created:Date.now()});closeOv();Object.assign(S,{view:'msgs',room:null,peer:null,group:r.id,chat:true});watchChat();render();toast('Group created 🎉')}catch(e){toast(errMsg(e))}}
+function groupInfo(){const g=groups.find(x=>x.id==S.group);if(!g)return;S.gsel=new Set();const rest=Object.keys(users).filter(i=>!g.members.includes(i));
+ ov(box(`<h3 style="font-weight:800">${esc(g.name)}</h3><label class="l">${g.members.length} members</label>${g.members.map(i=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0">${av(U(i).name,32,i)}<span style="flex:1">${esc(U(i).name)}${i==g.admin?' <span class="badge" style="--c:#8b5cf6">admin</span>':''}</span></div>`).join('')}${rest.length?`<label class="l">Add members</label>${pickList(rest)}<button class="btn" style="width:100%;margin-top:8px" onclick="addMembers()">Add selected</button>`:''}<button class="ghost" style="width:100%;margin-top:12px;color:#ef4444" onclick="leaveGroup()">Leave group</button>`))}
+async function addMembers(){if(!S.gsel.size)return toast('Select members first');try{await updateDoc(doc(db,'groups',S.group),{members:arrayUnion(...S.gsel)});closeOv();toast('Members added ✅')}catch(e){toast(errMsg(e))}}
+async function leaveGroup(){if(!confirm('Leave this group?'))return;try{await updateDoc(doc(db,'groups',S.group),{members:arrayRemove(S.uid)});closeOv();Object.assign(S,{group:null,room:'Tech',chat:false});watchChat();renderView();toast('You left the group')}catch(e){toast(errMsg(e))}}
+// ---------- stories ----------
+const stBy=()=>{const m={};stories.filter(x=>Date.now()-x.ts<DAY).forEach(x=>(m[x.uid]=m[x.uid]||[]).push(x));Object.values(m).forEach(a=>a.sort((x,y)=>x.ts-y.ts));return m};
+const unseen=a=>a.some(x=>!(x.views||[]).includes(S.uid));
+function paintStories(){const el=$('sbar');if(!el||!me())return;const m=stBy(),ids=Object.keys(m).filter(i=>i!=S.uid).sort((a,b)=>unseen(m[b])-unseen(m[a]));
+ const ring=(id,n,un,l)=>`<button style="text-align:center;width:68px;flex:none" onclick="openStory('${id}')"><span style="display:inline-block;padding:3px;border-radius:50%;background:${un?'var(--g)':'var(--bd)'}"><span style="display:block;border:3px solid var(--bg);border-radius:50%">${av(n,52)}</span></span><div style="font-size:.7rem;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(l)}</div></button>`;
+ el.innerHTML=(m[S.uid]?ring(S.uid,me().name,0,'Your story'):'')+`<button style="text-align:center;width:68px;flex:none" onclick="newStory()"><span class="av" style="width:58px;height:58px;font-size:1.6rem;background:var(--c2);color:var(--a);margin:3px 0 0">＋</span><div style="font-size:.7rem;margin-top:5px">Add story</div></button>`+ids.map(i=>ring(i,U(i).name,unseen(m[i]),U(i).name.split(' ')[0])).join('')}
+function newStory(){simg='';ov(box(`<h3 style="font-weight:800">Add to your story</h3><div id="sp" style="margin-top:10px"></div><label class="ghost" style="display:inline-block;margin-top:10px;cursor:pointer">📷 Choose photo<input type="file" accept="image/*" hidden onchange="spick(this.files[0])"></label><input id="sc" class="inp" maxlength="140" placeholder="Caption… (e.g. Day 5: demo day!)" style="margin-top:10px"><p style="font-size:.75rem;color:var(--mu);margin-top:6px">Stories disappear after 24 hours.</p><div style="display:flex;gap:10px;margin-top:12px"><button class="ghost" onclick="closeOv()">Cancel</button><button id="sb2" class="btn" style="flex:1" onclick="shareStory()">Share story</button></div>`))}
+const spick=f=>f&&img64(f,720,d=>{simg=d;$('sp').innerHTML=`<img src="${d}" style="border-radius:14px;max-height:260px;margin:auto">`});
+async function shareStory(){const cap=($('sc').value||'').trim();if(!simg&&!cap)return toast('Add a photo or a caption');$('sb2').disabled=true;try{await addDoc(collection(db,'stories'),{uid:S.uid,img:simg,cap,ts:Date.now(),views:[]});closeOv();toast('Story shared ✨')}catch(e){toast(errMsg(e));$('sb2').disabled=false}}
+function openStory(uid){const m=stBy();if(!m[uid])return;SV.list=[uid,...Object.keys(m).filter(i=>i!=uid&&i!=S.uid&&unseen(m[i]))];SV.ui=0;SV.i=Math.max(0,m[uid].findIndex(x=>!(x.views||[]).includes(S.uid)));showSt()}
+function showSt(){const m=stBy(),uid=SV.list[SV.ui],a=m[uid];if(!a)return closeOv();SV.i=Math.min(SV.i,a.length-1);const s=a[SV.i],u=U(uid),own=uid==S.uid;
+ if(!own&&!(s.views||[]).includes(S.uid))updateDoc(doc(db,'stories',s.id),{views:arrayUnion(S.uid)}).catch(()=>{});
+ const bg=s.img?'#000':`linear-gradient(135deg,hsl(${hue(u.name)} 70% 45%),hsl(${hue(u.name)+60} 70% 35%))`;
+ ov(`<div style="position:relative;width:min(420px,100%);height:min(86dvh,740px);border-radius:20px;overflow:hidden;background:${bg};color:#fff;display:flex;align-items:center;justify-content:center">${s.img?`<img src="${safeImg(s.img)}" style="width:100%;height:100%;object-fit:contain">`:''}${s.cap?`<div style="position:absolute;${s.img?'bottom:56px;left:0;right:0;background:#0009;padding:12px 16px;':'inset:0;display:grid;place-items:center;padding:30px;font-size:1.6rem;font-weight:800;text-align:center;'}word-break:break-word">${esc(s.cap)}</div>`:''}
+ <div style="position:absolute;top:0;left:0;right:0;padding:10px;background:linear-gradient(#0008,transparent)"><div style="display:flex;gap:4px">${a.map((x,i)=>`<div style="flex:1;height:3px;background:#fff5;border-radius:9px;overflow:hidden"><i style="display:block;height:100%;background:#fff;width:${i<SV.i?100:0}%;${i==SV.i?'animation:pg 5s linear forwards':''}"></i></div>`).join('')}</div><div style="display:flex;align-items:center;gap:8px;margin-top:10px">${av(u.name,32)}<b>${esc(u.name)}</b><span style="opacity:.7;font-size:.8rem">${ago(s.ts)}</span><span style="flex:1"></span>${own?`<button onclick="delStory('${s.id}')">🗑️</button>`:''}<button style="font-size:1.3rem;margin-left:8px" onclick="closeOv()">✕</button></div></div>
+ <div style="position:absolute;inset:80px 0 50px 0;display:flex"><div style="flex:1" onclick="stNav(-1)"></div><div style="flex:1" onclick="stNav(1)"></div></div>${own?`<div style="position:absolute;bottom:14px;left:16px;font-size:.85rem">👁 ${(s.views||[]).length} views</div>`:''}</div>`);
+ SV.t=setTimeout(()=>stNav(1),5000)}
+function stNav(d){const a=stBy()[SV.list[SV.ui]]||[];SV.i+=d;if(SV.i<0){SV.i=0;if(SV.ui>0)SV.ui--}else if(SV.i>=a.length){if(SV.ui<SV.list.length-1){SV.ui++;SV.i=0}else return closeOv()}showSt()}
+const delStory=id=>deleteDoc(doc(db,'stories',id)).then(()=>{closeOv();toast('Story deleted')});
+const availSel=()=>`<select class="inp" style="width:auto;margin-right:8px" onchange="setAvail(this.value)">${AVL.map(x=>`<option ${x==(me().avail||'Available')?'selected':''}>${x}</option>`).join('')}</select>`;
+const setAvail=v=>updateDoc(doc(db,'users',S.uid),{avail:v}).then(()=>toast('Status: '+v));
+function profV(){const id=S.peer||S.uid,u=U(id),own=id==S.uid,mine=posts.filter(p=>p.uid==id),lk=mine.reduce((a,p)=>a+p.likes.length,0),c=FC[u.field]||'#8b5cf6',xi=EX.indexOf(u.exec);
+ if(own&&S.edit)return `<div class="card" style="padding:20px"><h2 style="font-weight:800">Edit profile</h2>${inp('Full name','n','text',u.name)}<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${inp('Age','a','number',u.age)}${inp('Country','co','text',u.country)}</div><label class="l">Class</label><select id="e1" class="inp">${CLS.map(x=>`<option ${x==u.cls?'selected':''}>${x}</option>`).join('')}</select><label class="l">Field</label><select id="e2" class="inp">${F.map(x=>`<option ${x==u.field?'selected':''}>${x}</option>`).join('')}</select><label class="l">Idea status</label><select id="e3" class="inp">${EX.map(x=>`<option ${x==u.exec?'selected':''}>${x}</option>`).join('')}</select>${inp('Startup idea','i','text',u.idea)}${inp('Bio','b','text',u.bio)}${inp('Phone','ph','tel',u.phone)}${inp('Date of birth','dob','date',u.dob)}<div style="display:flex;gap:10px;margin-top:1.2rem"><button class="ghost" onclick="S.edit=false;renderView()">Cancel</button><button class="btn" style="flex:1" onclick="saveEdit()">Save changes</button></div></div>`;
+ return `<div class="card" style="overflow:hidden"><div style="height:110px;background:linear-gradient(135deg,${c},#06b6d4)"></div><div style="padding:0 20px 20px"><div style="margin-top:-36px;border:4px solid var(--bg);border-radius:50%;display:inline-block">${av(u.name,76,id)}</div><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div><h2 style="font-size:1.35rem;font-weight:800">${esc(u.name)}</h2><div style="color:var(--mu);font-size:.85rem">🎓 ${esc(u.cls)} · ${esc(u.age)} yrs · 📍 ${esc(u.country)}</div></div>${own?availSel()+'<button class="ghost" onclick="S.edit=true;renderView()">✏️ Edit</button>':`<button class="btn" onclick="dm('${id}')">💬 Message</button>`}</div>
+<p style="margin-top:12px">${esc(u.bio)}</p><div style="margin-top:8px">${badge(u.field)} ${availTag(u)}</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px;text-align:center">${[['Posts',mine.length],['Likes',lk],['🔥 Streak',streak(id)]].map(([l,v])=>`<div style="background:var(--c2);border-radius:14px;padding:10px"><b style="font-size:1.3rem">${v}</b><div style="font-size:.72rem;color:var(--mu)">${l}</div></div>`).join('')}</div>
+<div style="margin-top:16px;background:var(--c2);border-radius:14px;padding:14px"><div style="font-size:.75rem;color:var(--mu)">💡 STARTUP IDEA</div><b>${esc(u.idea||'—')}</b><div style="display:flex;gap:4px;margin-top:10px">${EX.map((x,i)=>`<div style="flex:1"><div class="bar"><i style="width:${i<=xi?100:0}%"></i></div><div style="font-size:.62rem;color:${i==xi?'var(--tx)':'var(--mu)'};margin-top:3px">${x}</div></div>`).join('')}</div></div></div></div><div id="plist"></div>`}
+async function saveEdit(){grab();const g=i=>$(i).value;if(!D.name)return toast('Name required');try{await setDoc(doc(db,'users',S.uid),{name:D.name,age:+D.age,country:D.country,cls:g('e1'),field:g('e2'),exec:g('e3'),idea:D.idea,bio:D.bio,phone:D.phone||'',dob:D.dob||''},{merge:true});S.edit=false;toast('Profile updated ✅');renderView()}catch(e){toast(errMsg(e))}}
 
 // ---------- shell ----------
-function go(v,x={}){Object.assign(S,{view:v,edit:false},{peer:null},x);if(v=='msgs'){if(!x.room&&!x.peer)S.room=S.room||'Tech';watchChat()}render()}
+const NAV=[['feed','🏠','Feed'],['explore','🔎','Explore'],['msgs','💬','Messages'],['profile','👤','Profile']];
+function paintRight(){const el=$('rp');if(!el)return;const c={},f={},lim=Date.now()-7*DAY;
+ posts.filter(p=>p.ts>lim).forEach(p=>{[...(p.t||'').toLowerCase().matchAll(/(?:^|\s)(#[a-z]\w*)/g)].forEach(m=>c[m[1]]=(c[m[1]]||0)+1);const fl=U(p.uid).field;if(fl)f[fl]=(f[fl]||0)+1});
+ const tg=Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,6),fl=Object.entries(f).sort((a,b)=>b[1]-a[1]).slice(0,3),on=Object.entries(users).filter(([i,u])=>i!=S.uid&&online(u)).slice(0,5);
+ el.innerHTML=`<div class="card" style="padding:16px"><b>🟢 Online now</b>${on.map(([i,u])=>`<div style="display:flex;gap:10px;align-items:center;margin-top:12px"><div style="cursor:pointer" onclick="go('profile',{peer:'${i}'})">${av(u.name,34,i)}</div><div style="flex:1;min-width:0;font-size:.88rem"><b>${esc(u.name)}</b><div style="color:var(--mu);font-size:.74rem">${esc(u.avail||'Available')}</div></div><button class="ghost" style="padding:.25rem .6rem;font-size:.78rem" onclick="dm('${i}')">Chat</button></div>`).join('')||'<p style="color:var(--mu);font-size:.85rem;margin-top:8px">No one else is online right now.</p>'}</div>
+ <div class="card" style="padding:16px"><b>🔥 Trending this week</b><div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">${tg.map(([t,n])=>`<button class="chip" onclick="go('feed',{filter:'${t}'})">${t} · ${n}</button>`).join('')}${fl.map(([t,n])=>`<button class="chip" onclick="go('feed',{filter:'${t}'})">${t} · ${n}</button>`).join('')||''}${tg.length||fl.length?'':'<span style="color:var(--mu);font-size:.85rem">Post with #hashtags to start a trend</span>'}</div></div>`}
+function renderView(){$('view').innerHTML={feed:feedV,explore:exploreV,msgs:msgsV,profile:profV}[S.view]();const v=S.view;
+ if(v=='feed'){paintStories();paintPosts();prev()}if(v=='profile')paintPosts();if(v=='explore')paintExplore();if(v=='msgs'){paintList();paintChat()}}
+function go(v,x={}){Object.assign(S,{view:v,edit:false,peer:null,group:null,chat:false},x);if(v=='msgs'&&!S.room&&!S.peer&&!S.group)S.room='Tech';if(v=='msgs')watchChat();render();scrollTo(0,0)}
 function render(){theme();const a=$('app');
-  if(!S.uid){a.innerHTML=authV();return}
-  if(!ready){a.innerHTML='<p class="mt-20 text-center opacity-60">Loading…</p>';return}
-  if(!me()){a.innerHTML=onboardV();return}
-  const t=[['feed','Feed'],['explore','Explore'],['msgs','Messages'],['profile','Profile']];
-  const body={feed:feedV,explore:exploreV,msgs:msgsV,profile:profV}[S.view]();
-  a.innerHTML=`<nav class="g p-2 flex items-center gap-1 sticky top-2 z-10 flex-wrap"><b class="mr-auto px-2 bg-clip-text text-transparent" style="background-image:linear-gradient(90deg,#a78bfa,#22d3ee)">FoundX</b>${t.map(([v,l])=>`<button class="chip ${S.view==v?'on':''}" onclick="go('${v}')">${l}</button>`).join('')}
-<button class="chip" onclick="localStorage.fxTheme=localStorage.fxTheme=='light'?'dark':'light';render()">🌗</button><button class="chip" onclick="signOutNow()">Logout</button></nav>${body}`;
-  const l=$('ml');if(l)l.scrollTop=1e6}
-Object.assign(window,{S,render,go,doAuth,saveProfile,post,pick,like,cmt,share,send,list,signOutNow:()=>signOut(auth)});
+ if(!S.uid){S.mode=S.mode=='onboard'?'login':S.mode;a.innerHTML=authV();return}
+ if(!ready||S.busy){a.innerHTML='<div style="display:grid;place-items:center;height:100vh"><div class="logo" style="font-size:2rem">FoundX…</div></div>';return}
+ if(!me()){if(S.mode!='onboard'){S.mode='onboard';S.step=1;D.name='';D.age=''}a.innerHTML=authV();return}
+ const m=me();
+ a.innerHTML=`<header class="mtop"><span class="logo">FoundX</span><span style="flex:1"></span><button title="Theme" onclick="localStorage.fxTheme=localStorage.fxTheme=='light'?'dark':'light';render()">🌗</button><button title="Logout" onclick="signOutNow()">⎋</button></header><div class="shell"><aside class="side"><div class="logo" style="padding:6px 12px">FoundX</div><div class="card" style="padding:8px">${NAV.map(([v,i,l])=>`<button class="nav ${S.view==v?'on':''}" onclick="go('${v}')"><span>${i}</span>${l}</button>`).join('')}<button class="nav" onclick="localStorage.fxTheme=localStorage.fxTheme=='light'?'dark':'light';render()"><span>🌗</span>Theme</button></div>
+ <div class="card" style="padding:12px"><div style="display:flex;gap:10px;align-items:center">${av(m.name,36,S.uid)}<div style="flex:1;min-width:0"><b style="font-size:.88rem">${esc(m.name)}</b><div style="font-size:.72rem;color:var(--mu)">🔥 ${streak(S.uid)} day streak</div></div><button title="Logout" onclick="signOutNow()">⎋</button></div><select class="inp" style="margin-top:10px;padding:.4rem .6rem;font-size:.82rem" onchange="setAvail(this.value)">${AVL.map(x=>`<option ${x==(m.avail||'Available')?'selected':''}>${x}</option>`).join('')}</select></div></aside>
+ <main id="view"></main><aside class="rp" id="rp"></aside></div>
+ <nav class="tabbar">${NAV.map(([v,i,l])=>`<button class="${S.view==v?'on':''}" onclick="go('${v}')"><span>${i}</span>${l}</button>`).join('')}</nav>`;
+ renderView();paintRight()}
+Object.assign(window,{S,D,render,renderView,go,grab,setD,next,doLogin,post,pick,prev,like,cmt,tg,share,del,room,dm,openGroup,send,cpick,saveEdit,paintExplore,paintList,newGroup,makeGroup,groupInfo,addMembers,leaveGroup,newStory,spick,shareStory,openStory,stNav,delStory,closeOv,setAvail,signOutNow:()=>signOut(auth)});
 render();
