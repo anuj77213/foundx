@@ -203,7 +203,7 @@ async function voteIdea(id,val){const i=ideas.find(x=>x.id==id);if(!i)return;con
 const delIdea=id=>{if(confirm('Delete this idea?'))deleteDoc(doc(db,'ideas',id)).then(()=>toast('Idea deleted'))};
 
 // ---------- tags, premium & payments ----------
-const PAY={upi:'YOUR_UPI_ID@bank',qr:'qr.png',wa:'917354103448',tag:200,prem:450},ADMIN_UID='PUT_YOUR_ADMIN_UID_HERE';
+const PAY={upi:'YOUR_UPI_ID@bank',qr:'qr.jpeg',wa:'917354103448',tag:200,prem:450},ADMIN_UID='PUT_YOUR_ADMIN_UID_HERE';
 const RL={Tech:'Builder',AI:'AI Builder','E-commerce':'Seller',EdTech:'EdTech Founder',Content:'Creator','Social Impact':'Changemaker',Marketing:'Growth Maker'};
 const TAGS=['Entrepreneur','Founder','Early Founder','Video Editor','Entertainer','Developer','Designer','Marketer','Content Creator'];
 const JR=['Developer','Designer','Video editor','Marketer','Sales','Content creator','Finance','Mentor','Other'];
