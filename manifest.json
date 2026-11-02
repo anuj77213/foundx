@@ -1,0 +1,24 @@
+{
+  "name": "FoundX",
+  "short_name": "FoundX",
+  "description": "Discover people. Share ideas. Build startups.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FFF4E3",
+  "theme_color": "#FF5A1F",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
