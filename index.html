@@ -54,6 +54,22 @@ label.l{display:block;font-size:.78rem;color:var(--mu);margin:.9rem 0 .3rem;font
 .chatwrap{grid-template-columns:minmax(0,1fr);height:calc(100dvh - 210px);min-height:360px}.chatwrap .cp{display:none}.chatwrap.open .cp{display:flex}.chatwrap.open .cl{display:none}.back{display:inline-flex!important}
 .inp,select.inp,textarea.inp{font-size:16px}.ghost,.chip{min-height:36px}.btn{min-height:42px}
 .toast{width:max-content;max-width:92vw;text-align:center}.bub{max-width:100%}}
+
+/* ===== Polish layer: same orange FoundX identity, cleaner details. Delete this block to go back. ===== */
+::selection{background:var(--y);color:#1A1612}
+html{scroll-behavior:smooth}
+:focus-visible{outline:3px solid var(--a);outline-offset:2px;border-radius:8px}
+.inp:focus-visible{outline:none}.btn:focus-visible{outline-color:var(--ink)}
+.card{transition:transform .15s,box-shadow .15s}
+article.card:hover{transform:translate(-1px,-1px);box-shadow:5px 5px 0 var(--cb)}
+.btn,.ghost,.chip,.nav{cursor:pointer}.btn:disabled,.ghost:disabled{cursor:not-allowed}
+.nav{font-size:.95rem}.badge{letter-spacing:.01em}.card h3{line-height:1.25}
+.inp::placeholder{color:var(--mu);opacity:.7}textarea.inp{line-height:1.5;resize:vertical}
+.toast{box-shadow:4px 4px 0 var(--a);font-weight:600}
+.shell{gap:26px}
+.tabbar button{min-height:48px;justify-content:center}.tabbar button.on span{transform:translateY(-1px) scale(1.1)}
+@media(max-width:760px){.shell{gap:14px}}
+@media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 </style></head>
 <body><div id="app"></div>
 <script type="module" src="app.js?v=10"></script></body></html>
