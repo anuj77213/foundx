@@ -7,7 +7,7 @@ const FC={Tech:'#2D6CFF',AI:'#7A5AF8','E-commerce':'#E58A00',EdTech:'#12B76A',Co
 const CLS=['High School','College','Independent'],EX=['Just an idea','Building MVP','Launched','Earning revenue'],ROLES=['Entrepreneur','Developer','Video Editor','Designer','Marketer','Content Creator','Sales','Student','Mentor','Other'],LOOK=['Co-founder','Team','Part-time work','Mentor','Learn skills'],JT=['Startup','Freelancing','Creator','Job / Career','Student / Learning'],STG={Startup:EX,Freelancing:['Learning skills','Taking first clients','Regular clients','Full-time freelancer'],Creator:['Starting out','Posting regularly','Growing audience','Earning from it'],'Job / Career':['Preparing','Looking for work','Working','Growing / switching'],'Student / Learning':['Exploring','Learning daily','Building projects','Ready to work']};
 const S={uid:null,view:'feed',filter:'All',peer:null,room:'Tech',q:'',xf:'All',mode:'login',step:1,edit:false,img:'',draft:'',open:new Set(),chat:false,pw:false,busy:false,group:null,cq:'',gsel:new Set(),idf:false,ibusy:false};
 let D={country:'India',cls:'High School',field:'Tech',exec:'Just an idea'};
-let users={},posts=[],msgs=[],groups=[],stories=[],ideas=[],perks={},orders=[],myo=[],refN=0,refAll={},notifs=[],reps=[],unsubs=[],unsubChat=null,ready=false,dirty=false;
+let users={},posts=[],msgs=[],groups=[],stories=[],ideas=[],perks={},orders=[],myo=[],refN=0,refAll={},notifs=[],reps=[],NI=false,unsubs=[],unsubChat=null,ready=false,dirty=false;
 const $=id=>document.getElementById(id),U=id=>users[id]||{name:'Founder'},me=()=>users[S.uid];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ago=t=>{const m=(Date.now()-t)/6e4|0;return m<1?'just now':m<60?m+'m':m<1440?(m/60|0)+'h':(m/1440|0)+'d'};
@@ -40,7 +40,7 @@ function listen(){
  on(query(collection(db,'posts'),orderBy('ts','desc'),limit(150)),s=>{posts=s.docs.map(d=>({id:d.id,...d.data()}));if($('view'))paint()}),
  on(query(collection(db,'stories'),orderBy('ts','desc'),limit(120)),s=>{stories=s.docs.map(d=>({id:d.id,...d.data()}));stories.filter(x=>x.uid==S.uid&&Date.now()-x.ts>=DAY).forEach(x=>deleteDoc(doc(db,'stories',x.id)).catch(()=>{}));if($('view'))paint()}),
  on(query(collection(db,'orders'),where('uid','==',S.uid)),q=>{myo=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.ts-a.ts);if(S.view=='shop'&&!S.shop)renderView()}),
- on(query(collection(db,'notifs'),where('to','==',S.uid)),q=>{notifs=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.ts-a.ts);const n=notifs.filter(x=>!x.read).length;document.title=(n?`(${n}) `:'')+'foundx – Build in public with young founders';bellUpd();if(S.view=='notif')renderView()}),
+ on(query(collection(db,'notifs'),where('to','==',S.uid)),q=>{notifs=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.ts-a.ts);const n=notifs.filter(x=>!x.read).length;document.title=(n?`(${n}) `:'')+'foundx – Build in public with young founders';bellUpd();q.docChanges().forEach(c=>{if(c.type=='added'&&NI&&!c.doc.data().read)alertNew(c.doc.data())});NI=true;if(S.view=='notif')renderView()}),
  on(query(collection(db,'referrals'),where('by','==',S.uid)),q=>{refN=q.size;if(S.view=='profile'&&!S.edit)renderView()}),
  ...(S.uid==ADMIN_UID?[on(collection(db,'referrals'),q=>{refAll={};q.docs.forEach(d=>{const b=d.data().by;refAll[b]=(refAll[b]||0)+1});if(S.view=='shop'&&!S.shop)renderView()})]:[]),
  ...(S.uid==ADMIN_UID?[on(collection(db,'reports'),q=>{reps=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.ts-a.ts);if(S.view=='shop'&&!S.shop)renderView()})]:[]),
@@ -57,7 +57,7 @@ document.addEventListener('focusout',()=>{if(dirty){dirty=false;setTimeout(paint
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)beat()});
 addEventListener('offline',()=>toast('You are offline'));addEventListener('online',()=>toast('Back online ✅'));
 addEventListener('unhandledrejection',e=>toast('⚠️ '+(e.reason?.message||'Something went wrong')));
-onAuthStateChanged(auth,u=>{unsubs.forEach(f=>f());unsubChat&&unsubChat();clearInterval(hb);closeOv();S.uid=u?.uid||null;ready=false;users={};posts=[];stories=[];groups=[];ideas=[];perks={};orders=[];myo=[];refN=0;notifs=[];reps=[];msgs=[];Object.assign(S,{view:'feed',room:'Tech',peer:null,group:null,chat:false,filter:'All'});if(u)listen();render()});
+onAuthStateChanged(auth,u=>{unsubs.forEach(f=>f());unsubChat&&unsubChat();clearInterval(hb);closeOv();S.uid=u?.uid||null;ready=false;users={};posts=[];stories=[];groups=[];ideas=[];perks={};orders=[];myo=[];refN=0;notifs=[];reps=[];NI=false;msgs=[];Object.assign(S,{view:'feed',room:'Tech',peer:null,group:null,chat:false,filter:'All'});if(u)listen();render()});
 
 // ---------- auth ----------
 const STEPS=()=>S.mode=='signup'?['acct','about','idea']:['about','idea'];
@@ -325,7 +325,7 @@ async function claimRef(){const t=$('rt')?.value||TAGS[0];if(refN<REFGOAL)return
 const NT={};
 function notify(to,type,pid){if(!to||to==S.uid)return;const k=to+type+(pid||''),n=Date.now();if(NT[k]&&n-NT[k]<3e5)return;NT[k]=n;addDoc(collection(db,'notifs'),{to,from:S.uid,type,pid:pid||'',ts:n,read:false}).catch(()=>{})}
 const NTX={like:'liked your post',comment:'commented on your post',message:'sent you a message'};
-function notifV(){const un=notifs.filter(x=>!x.read).length;setTimeout(()=>{if(S.view=='notif')readAll()},2500);return `<div style="display:flex;align-items:center;gap:10px"><h2 style="font-size:1.4rem;font-weight:800;flex:1">🔔 Alerts${un?` <span class="badge" style="--c:#FF5A1F">${un} new</span>`:''}</h2>${un?'<button class="ghost" onclick="readAll()">Mark all read</button>':''}</div>`+(notifs.length?notifs.slice(0,50).map(n=>`<div class="card" style="padding:12px 14px;margin-top:10px;display:flex;gap:10px;align-items:center;cursor:pointer;${n.read?'':'border-color:var(--a)'}" onclick="openN('${n.id}')">${av(U(n.from).name,34,n.from)}<div style="flex:1"><b>${esc(U(n.from).name)}</b> ${NTX[n.type]||'did something'}<div style="font-size:.75rem;color:var(--mu)">${ago(n.ts)}</div></div>${n.read?'':'<span style="width:10px;height:10px;border-radius:50%;background:var(--a)"></span>'}</div>`).join(''):`<div class="card" style="padding:40px;text-align:center;margin-top:14px;color:var(--mu)"><div style="font-size:2.2rem">🔔</div>No alerts yet.<br>Likes, comments and messages will show up here.</div>`)}
+function notifV(){const un=notifs.filter(x=>!x.read).length;setTimeout(()=>{if(S.view=='notif')readAll()},2500);return `<div style="display:flex;align-items:center;gap:10px"><h2 style="font-size:1.4rem;font-weight:800;flex:1">🔔 Alerts${un?` <span class="badge" style="--c:#FF5A1F">${un} new</span>`:''}</h2>${un?'<button class="ghost" onclick="readAll()">Mark all read</button>':''}</div>`+notifCard()+(notifs.length?notifs.slice(0,50).map(n=>`<div class="card" style="padding:12px 14px;margin-top:10px;display:flex;gap:10px;align-items:center;cursor:pointer;${n.read?'':'border-color:var(--a)'}" onclick="openN('${n.id}')">${av(U(n.from).name,34,n.from)}<div style="flex:1"><b>${esc(U(n.from).name)}</b> ${NTX[n.type]||'did something'}<div style="font-size:.75rem;color:var(--mu)">${ago(n.ts)}</div></div>${n.read?'':'<span style="width:10px;height:10px;border-radius:50%;background:var(--a)"></span>'}</div>`).join(''):`<div class="card" style="padding:40px;text-align:center;margin-top:14px;color:var(--mu)"><div style="font-size:2.2rem">🔔</div>No alerts yet.<br>Likes, comments and messages will show up here.</div>`)}
 async function openN(id){const n=notifs.find(x=>x.id==id);if(!n)return;try{await updateDoc(doc(db,'notifs',id),{read:true})}catch(e){}if(n.type=='message')dm(n.from);else go('feed')}
 const readAll=()=>notifs.filter(x=>!x.read).forEach(n=>updateDoc(doc(db,'notifs',n.id),{read:true}).catch(()=>{}));
 async function report(kind,target){const r=(prompt('Why are you reporting this? (spam, abuse, fake, other)')||'').trim().slice(0,200);if(!r)return;try{await addDoc(collection(db,'reports'),{by:S.uid,kind,target,reason:r,ts:Date.now()});toast('Thanks, we will review it.')}catch(e){toast(errMsg(e))}}
@@ -373,6 +373,23 @@ function gsCard(){let hide='',vx='';try{hide=localStorage.getItem('fx_gs_hide');
  const n=st.filter(x=>x[1]).length;if(n==st.length)return '';
  return `<div class="card" style="padding:14px;margin-bottom:14px"><div style="display:flex;align-items:center;gap:8px"><b style="flex:1">🚀 Get started · ${n}/${st.length}</b><button class="ghost" style="padding:.25rem .7rem" onclick="hideGs()">Hide</button></div><div class="bar" style="margin:8px 0"><i style="width:${n/st.length*100}%"></i></div>${st.map(([t,d,a])=>`<div style="display:flex;gap:8px;align-items:center;margin-top:6px"><span>${d?'✅':'⬜'}</span><span style="flex:1;${d?'color:var(--mu);text-decoration:line-through':''}">${t}</span>${d?'':`<button class="ghost" style="padding:.25rem .7rem" onclick="${a}">Go</button>`}</div>`).join('')}</div>`}
 
+// ---------- phone/computer alerts: sound + notification while FoundX is open ----------
+const AC2=window.AudioContext?new AudioContext():null;addEventListener('pointerdown',()=>AC2&&AC2.state=='suspended'&&AC2.resume());
+const sndOn=()=>{try{return localStorage.getItem('fx_snd')!='0'}catch(e){return true}};
+function ping(){if(!AC2||!sndOn())return;try{const o=AC2.createOscillator(),g=AC2.createGain();o.type='sine';o.frequency.value=880;g.gain.value=.06;g.gain.exponentialRampToValueAtTime(.001,AC2.currentTime+.3);o.connect(g);g.connect(AC2.destination);o.start();o.stop(AC2.currentTime+.3)}catch(e){}}
+function alertNew(n){const nm=U(n.from).name||'Someone',tx=NTX[n.type]||'did something';ping();
+ if(document.hidden&&typeof Notification!=='undefined'&&Notification.permission=='granted'){const body=nm+' '+tx,o={body,icon:'icon-192.png',badge:'icon-192.png',tag:'fx-'+n.type};
+  (navigator.serviceWorker?navigator.serviceWorker.getRegistration():Promise.resolve(null)).then(r=>r?r.showNotification('FoundX',o):new Notification('FoundX',o)).catch(()=>{})}
+ else toast('🔔 '+nm+' '+tx)}
+const enableNotif=()=>{if(typeof Notification==='undefined')return;Notification.requestPermission().then(()=>renderView())};
+const toggleSnd=()=>{try{localStorage.setItem('fx_snd',sndOn()?'0':'1')}catch(e){}renderView()};
+const notifCard=()=>{const c=(t,b)=>`<div class="card" style="padding:12px 14px;margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:200px;font-size:.88rem">${t}</div>${b}</div>`;
+ if(typeof Notification==='undefined')return c('Notifications are not supported in this browser. '+(isIOS()?'On iPhone, tap Share, then Add to Home Screen.':''),'');
+ const p=Notification.permission;
+ if(p=='default')return c('🔔 <b>Get notified</b> when someone messages you, likes or comments. Works while FoundX is open or in the background.','<button class="btn" onclick="enableNotif()">Turn on</button>');
+ if(p=='denied')return c('Notifications are blocked. Allow them for this site in your browser settings to get alerts.','');
+ return c('✅ Notifications are on'+(isIOS()?'. On iPhone, install FoundX from Share → Add to Home Screen.':''),`<button class="ghost" onclick="toggleSnd()">${sndOn()?'🔊 Sound on':'🔇 Sound off'}</button>`)};
+
 // ---------- shell ----------
 const NAV=[['feed','🏠','Feed'],['explore','🔎','Explore'],['idea','💡','Idea Lab'],['game','🎮','Biz Game'],['msgs','💬','Messages'],['profile','👤','Profile']];
 function paintRight(){const el=$('rp');if(!el)return;const c={},f={},lim=Date.now()-7*DAY;
@@ -393,5 +410,5 @@ function render(){theme();const a=$('app');
  <main id="view"></main><aside class="rp" id="rp"></aside></div>
  <nav class="tabbar">${NAV.map(([v,i,l])=>`<button class="${S.view==v?'on':''}" onclick="go('${v}')"><span>${i}</span>${l}</button>`).join('')}</nav>`;
  renderView();paintRight()}
-Object.assign(window,{hideGs,copyStats,shareProfile,installApp,claimRef,openN,readAll,report,toggleBlock,copyRef,shareRef,resolveRep,teamPost,tgl,gPick,gAns,gNext,pickShop,submitOrder,okOrder,noOrder,joinIdea,ideaForm,runIdea,voteIdea,delIdea,S,D,render,renderView,go,grab,setD,next,doLogin,post,pick,prev,like,cmt,tg,share,del,room,dm,openGroup,send,cpick,saveEdit,paintExplore,paintList,newGroup,makeGroup,groupInfo,addMembers,leaveGroup,newStory,spick,shareStory,openStory,stNav,delStory,closeOv,setAvail,signOutNow:()=>signOut(auth)});
+Object.assign(window,{enableNotif,toggleSnd,hideGs,copyStats,shareProfile,installApp,claimRef,openN,readAll,report,toggleBlock,copyRef,shareRef,resolveRep,teamPost,tgl,gPick,gAns,gNext,pickShop,submitOrder,okOrder,noOrder,joinIdea,ideaForm,runIdea,voteIdea,delIdea,S,D,render,renderView,go,grab,setD,next,doLogin,post,pick,prev,like,cmt,tg,share,del,room,dm,openGroup,send,cpick,saveEdit,paintExplore,paintList,newGroup,makeGroup,groupInfo,addMembers,leaveGroup,newStory,spick,shareStory,openStory,stNav,delStory,closeOv,setAvail,signOutNow:()=>signOut(auth)});
 render();
