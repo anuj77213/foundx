@@ -1,6 +1,6 @@
 import {auth,db,fn} from './firebase-config.js';
 import {httpsCallable} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js';
-import {createUserWithEmailAndPassword as signUp,signInWithEmailAndPassword as signIn,signOut,onAuthStateChanged,signInAnonymously} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import {createUserWithEmailAndPassword as signUp,signInWithEmailAndPassword as signIn,signOut,onAuthStateChanged,signInAnonymously,sendPasswordResetEmail,sendEmailVerification,sendSignInLinkToEmail,isSignInWithEmailLink,signInWithEmailLink} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {doc,setDoc,collection,addDoc,updateDoc,deleteDoc,query,orderBy,limit,where,onSnapshot,arrayUnion,arrayRemove,deleteField} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 const FC={Tech:'#2D6CFF',AI:'#7A5AF8','E-commerce':'#E58A00',EdTech:'#12B76A',Content:'#E83E8C','Social Impact':'#0EA5A4',Marketing:'#FF5A1F'},F=Object.keys(FC);
@@ -22,7 +22,7 @@ const inp=(l,id,t='text',v='',ph='')=>`<label class="l">${l}</label><input id="$
 const theme=()=>document.documentElement.classList.toggle('dark',localStorage.fxTheme==='dark');
 const inInput=()=>{const a=document.activeElement;return a&&['INPUT','TEXTAREA','SELECT'].includes(a.tagName)&&$('view')?.contains(a)};
 const dmId=()=>[S.uid,S.peer].sort().join('_');
-const errMsg=e=>({'auth/invalid-credential':'Wrong email or password.','auth/email-already-in-use':'This email is already registered. Try logging in.','auth/weak-password':'Password must be at least 6 characters.','auth/invalid-email':'Please enter a valid email.','auth/too-many-requests':'Too many tries. Wait a bit and retry.'}[e.code]||e.message);
+const errMsg=e=>({'auth/invalid-credential':'Wrong email or password.','auth/email-already-in-use':'This email is already registered. Try logging in.','auth/weak-password':'Password must be at least 6 characters.','auth/invalid-email':'Please enter a valid email.','auth/too-many-requests':'Too many tries. Wait a bit and retry.','auth/user-not-found':'Is email ka account nahi mila.','auth/missing-email':'Pehle email likho.','auth/invalid-action-code':'Ye link purana ho gaya ya pehle use ho chuka hai. Naya link mangao.','auth/expired-action-code':'Link expire ho gaya. Naya link mangao.'}[e.code]||e.message);
 
 // ---------- realtime ----------
 const DAY=864e5,SV={list:[],ui:0,i:0,t:null};let hb=null,warned=false,simg='';
@@ -64,7 +64,7 @@ const STEPS=()=>S.mode=='signup'?['acct','about','idea']:['about','idea'];
 function grab(){[['em','email'],['pw','pw'],['n','name'],['a','age'],['co','country'],['dob','dob'],['ph','phone'],['i','idea'],['b','bio']].forEach(([id,k])=>{if($(id))D[k]=$(id).value.trim()})}
 const setD=(k,v)=>{grab();D[k]=v;render()};
 function authV(){const login=S.mode=='login',st=STEPS()[S.step-1],n=STEPS().length;
- const body=login?`<h2 style="font-size:1.5rem;font-weight:800">Welcome back 👋</h2>${inp('Email','em','email',D.email,'you@email.com')}<label class="l">Password</label><div style="position:relative"><input id="pw" type="${S.pw?'text':'password'}" class="inp" onkeydown="event.key=='Enter'&&doLogin()"><button style="position:absolute;right:12px;top:10px" onclick="grab();S.pw=!S.pw;render()">${S.pw?'🙈':'👁️'}</button></div><button class="btn" style="width:100%;margin-top:1.2rem" onclick="doLogin()">Log in</button><button class="ghost" style="width:100%;margin-top:10px" onclick="guestIn()">👀 Guest ki tarah dekho</button>`
+ const body=login?`<h2 style="font-size:1.5rem;font-weight:800">Welcome back 👋</h2>${inp('Email','em','email',D.email,'you@email.com')}<label class="l">Password</label><div style="position:relative"><input id="pw" type="${S.pw?'text':'password'}" class="inp" onkeydown="event.key=='Enter'&&doLogin()"><button style="position:absolute;right:12px;top:10px" onclick="grab();S.pw=!S.pw;render()">${S.pw?'🙈':'👁️'}</button></div><p style="text-align:right;margin-top:8px;font-size:.85rem"><a style="color:var(--a);font-weight:700;cursor:pointer" onclick="resetPw()">Password bhool gaye?</a></p><button class="btn" style="width:100%;margin-top:.6rem" onclick="doLogin()">Log in</button><button class="ghost" style="width:100%;margin-top:10px" onclick="sendLink()">✉️ Email link se login (bina password)</button><button class="ghost" style="width:100%;margin-top:10px" onclick="guestIn()">👀 Guest ki tarah dekho</button>`
  :`<div class="bar" style="margin-bottom:10px"><i style="width:${S.step/n*100}%"></i></div><div class="step">Step ${S.step} of ${n}</div>`+
  (st=='acct'?`<h2 style="font-size:1.4rem;font-weight:800;margin-top:6px">Create your account</h2>${inp('Email','em','email',D.email,'you@email.com')}${inp('Password (min 6 characters)','pw','password',D.pw)}`:
   st=='about'?`<h2 style="font-size:1.4rem;font-weight:800;margin-top:6px">Quick intro 👋</h2>${inp('Your name','n','text',D.name)}<label class="l">I am a… (optional, pick up to 4)</label>${mchips('roles',ROLES,D.roles)}`:
@@ -78,7 +78,7 @@ async function next(skip){grab();const st=STEPS()[S.step-1];
  if(st=='acct'){if(!/^\S+@\S+\.\S+$/.test(D.email||''))return toast('Enter a valid email');if((D.pw||'').length<6)return toast('Password must be at least 6 characters')}
  if(st=='about'){if(!D.name)return toast('Please enter your name')}
  if(S.step<STEPS().length){S.step++;return render()}
- try{S.busy=true;render();let email=D.email;if(S.mode=='signup')await signUp(auth,D.email,D.pw);else email=auth.currentUser.email;if(!(STG[D.jt||'Startup']||EX).includes(D.exec))D.exec='';
+ try{S.busy=true;render();let email=D.email;if(S.mode=='signup'){await signUp(auth,D.email,D.pw);try{await sendEmailVerification(auth.currentUser)}catch(e){}}else email=auth.currentUser.email;if(!(STG[D.jt||'Startup']||EX).includes(D.exec))D.exec='';
   await setDoc(doc(db,'users',auth.currentUser.uid),{name:D.name,age:+D.age||0,cls:D.cls||'',country:D.country||'',field:D.field||'',roles:D.roles||[],role:(D.roles||[])[0]||'',jt:D.jt||'',look:D.look||'',needs:D.needs||[],bio:D.bio||'',idea:D.idea||'',exec:D.exec||'',created:Date.now(),lastSeen:Date.now(),avail:'Available'});await setDoc(doc(db,'users',auth.currentUser.uid,'private','info'),{email,phone:D.phone||'',dob:D.dob||''});try{const rf=localStorage.getItem('fx_ref');if(rf&&rf!==auth.currentUser.uid){await setDoc(doc(db,'referrals',auth.currentUser.uid),{by:rf,ts:Date.now()});localStorage.removeItem('fx_ref')}}catch(e){}
   S.busy=false;S.mode='login';D.pw='';toast('Welcome to FoundX! 🎉')}catch(e){S.busy=false;S.step=1;S.mode=S.mode=='onboard'?'onboard':'signup';render();toast(errMsg(e))}}
 
@@ -106,7 +106,7 @@ function paintPosts(){const el=$('plist');if(!el)return;const a=document.activeE
  el.innerHTML=ps.map(postC).join('')||`<div class="card" style="padding:40px;text-align:center;margin-top:14px;color:var(--mu)"><div style="font-size:2.2rem">🌱</div>No posts here yet.<br>Be the first to share your journey!</div>`}
 
 // ---------- views ----------
-const feedV=()=>`${guestBar()}${gsCard()}<div id="sbar" class="scroll" style="margin-bottom:12px"></div>
+const feedV=()=>`${guestBar()}${verBar()}${gsCard()}<div id="sbar" class="scroll" style="margin-bottom:12px"></div>
 <div class="scroll" style="margin-top:14px">${['All','Latest','Trending',...(S.filter[0]=='#'?[S.filter]:[]),...(S.topics||F.includes(S.filter)?F:[])].map(f=>`<button class="chip ${S.filter==f?'on':''}" onclick="S.filter='${f}';renderView()">${f=='Trending'?'🔥 ':''}${f}</button>`).join('')}<button class="chip" onclick="S.topics=!S.topics;renderView()">${S.topics?'Topics ▴':'Topics ▾'}</button></div><div id="plist"></div>`;
 const ucard=([id,u])=>{const rl=(u.roles&&u.roles.length?u.roles:u.role?[u.role]:[]).slice(0,3),st=[u.jt,u.exec].filter(Boolean).join(' · ');
  return `<div class="card" style="padding:14px;margin-top:12px"><div style="display:flex;gap:12px;align-items:center"><div style="cursor:pointer" onclick="go('profile',{peer:'${id}'})">${av(u.name,46,id)}</div><div style="flex:1;min-width:0"><b>${esc(u.name)}</b>${seal(id)} ${badge(u.field)}<div style="font-size:.8rem;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.idea||u.bio||u.cls||'')}</div></div></div>
@@ -438,4 +438,22 @@ const guestBar=()=>S.guest?`<div class="card" style="padding:12px 14px;margin-bo
 ['post','postSheet','composePost','like','cmt','send','cpick','dm','room','openGroup','newGroup','makeGroup','addMembers','newStory','shareStory','voteIdea','joinIdea','runIdea','delIdea','del','report','toggleBlock','saveEdit','setAvail','claimRef','submitOrder','teamPost'].forEach(n=>{const f=window[n];if(typeof f=='function')window[n]=(...a)=>S.guest?needAcc():f(...a)});
 const go0=window.go;window.go=(v,x={})=>S.guest&&(['msgs','shop','notif'].includes(v)||(v=='profile'&&!x.peer))?needAcc():go0(v,x);
 Object.assign(window,{needAcc,guestIn});
+
+// ---------- forgot password + email verification ----------
+async function resetPw(){grab();if(!/^\S+@\S+\.\S+$/.test(D.email||''))return toast('Pehle upar apna email likho');try{await sendPasswordResetEmail(auth,D.email);toast('Reset link bhej diya ✅ Inbox ya spam dekho')}catch(e){toast(errMsg(e))}}
+const verBar=()=>{const u=auth.currentUser;if(S.guest||!u||u.emailVerified||S.vh)return '';return `<div class="card" style="padding:12px 14px;margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:180px;font-size:.88rem">📧 Apna email verify karo, taaki account safe rahe aur password reset ho sake.</span><button class="btn" onclick="sendVer()">Link bhejo</button><button class="ghost" onclick="chkVer()">Maine verify kar liya</button><button class="ghost" aria-label="Close" onclick="S.vh=1;renderView()">✕</button></div>`};
+async function sendVer(){try{await sendEmailVerification(auth.currentUser);toast('Verification link bhej diya ✅ Inbox ya spam dekho')}catch(e){toast(errMsg(e))}}
+async function chkVer(){try{await auth.currentUser.reload();toast(auth.currentUser.emailVerified?'Email verify ho gaya ✅':'Abhi verify nahi hua. Mail ka link khol kar aao');renderView()}catch(e){toast(errMsg(e))}}
+Object.assign(window,{resetPw,sendVer,chkVer});
+
+// ---------- passwordless login: one-time email link ----------
+async function sendLink(){grab();if(!/^\S+@\S+\.\S+$/.test(D.email||''))return toast('Pehle upar apna email likho');
+ try{await sendSignInLinkToEmail(auth,D.email,{url:location.origin+location.pathname,handleCodeInApp:true});try{localStorage.setItem('fx_le',D.email)}catch(e){}toast('Login link bhej diya ✅ Inbox ya spam dekho')}
+ catch(e){toast(e.code=='auth/operation-not-allowed'?'Email link login Firebase mein abhi on nahi hai':errMsg(e))}}
+(async()=>{try{if(!isSignInWithEmailLink(auth,location.href))return;let em='';try{em=localStorage.getItem('fx_le')||''}catch(e){}
+ if(!em)em=(prompt('Confirm karne ke liye apna email likho')||'').trim();if(!em)return;
+ await signInWithEmailLink(auth,em,location.href);try{localStorage.removeItem('fx_le')}catch(e){}
+ try{history.replaceState(null,'',location.pathname)}catch(e){}toast('Login ho gaya ✅')}
+ catch(e){try{history.replaceState(null,'',location.pathname)}catch(x){}toast(errMsg(e))}})();
+Object.assign(window,{sendLink});
 render();
